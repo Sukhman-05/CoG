@@ -50,6 +50,7 @@ interface Lesson {
 }
 
 interface Challenge {
+  id: string; //unique id for each challenge -> for editing purposes
   title: string;
   description: string;
   commitment_level: string;
@@ -102,6 +103,11 @@ function SdgBadge({ sdg, primary }: { sdg: number; primary?: boolean }) {
 type InputMode = "pdf" | "pmc";
 
 export default function Home() {
+
+  //Added these for editing challenges
+  const [editingChallengeId, setEditingChallengeId] = useState<string | null>(null);
+  const [editingChallengeDraft, setEditingChallengeDraft] = useState<Challenge | null>(null);
+
   const [mode, setMode] = useState<InputMode>("pdf");
 
   // PDF mode state
@@ -162,6 +168,8 @@ export default function Home() {
     setDragging(false);
   }
 
+
+  
   // ─── PDF submit ───
   async function handlePdfSubmit(e: FormEvent) {
     e.preventDefault();
@@ -188,8 +196,15 @@ export default function Home() {
         setError(data.error ?? "Something went wrong.");
         return;
       }
-      setResult(data);
-      addToHistory(file.name, data);
+      const normalized = {
+        ...data,
+        challenges: (data.challenges ?? []).map((c: any, index: number) => ({
+          id: `${Date.now()}-${index}`,
+          ...c,
+        })),
+      };
+      setResult(normalized);
+      addToHistory(file.name, normalized);
     } catch {
       setError("Network error — please try again.");
     } finally {
@@ -239,8 +254,16 @@ export default function Home() {
         setError(data.error ?? "Analysis failed.");
         return;
       }
-      setResult(data);
-      addToHistory(pmcid, data);
+      const normalized = {
+        ...data,
+        challenges: (data.challenges ?? []).map((c: any, index: number) => ({
+          id: `${Date.now()}-${index}`,
+          ...c,
+        })),
+      };
+      
+      setResult(normalized);
+      addToHistory(pmcid, normalized);
     } catch {
       setError("Network error — please try again.");
     } finally {
@@ -249,6 +272,57 @@ export default function Home() {
     }
   }
 
+  function updateChallenge(challengeId: string, updater: (c: Challenge) => Challenge) {
+    setResult(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        challenges: prev.challenges.map(c =>
+          c.id === challengeId ? updater(c) : c
+        ),
+      };
+    });
+  
+    // Sync history so Excel export stays consistent
+    setHistory(prev =>
+      prev.map(entry =>
+        entry.result.challenges.some(c => c.id === challengeId)
+          ? {
+              ...entry,
+              result: {
+                ...entry.result,
+                challenges: entry.result.challenges.map(c =>
+                  c.id === challengeId ? updater(c) : c
+                ),
+              },
+            }
+          : entry
+        )
+      );
+    }
+    
+    function startEditing(challenge: Challenge) {
+      setEditingChallengeId(challenge.id);
+      setEditingChallengeDraft({ ...challenge });
+    }
+    
+    function cancelEditing() {
+      setEditingChallengeId(null);
+      setEditingChallengeDraft(null);
+    }
+    
+    function saveEditing() {
+      if (!editingChallengeId || !editingChallengeDraft) return;
+      updateChallenge(editingChallengeId, () => editingChallengeDraft);
+      setEditingChallengeId(null);
+      setEditingChallengeDraft(null);
+    }
+
+    function handleDraftChange<K extends keyof Challenge>(field: K, value: Challenge[K]) {
+      setEditingChallengeDraft(prev =>
+        prev ? { ...prev, [field]: value } : prev
+      );
+    }
   // ─── Excel download ───
   const downloadExcel = useCallback(() => {
     const rows = history.map((h) => ({
@@ -588,52 +662,153 @@ export default function Home() {
                 Challenges
               </h2>
               <div className="space-y-4">
-                {result.challenges.map((c, i) => (
-                  <div key={i} className="flex gap-3">
+                
+
+              {result.challenges.map((c, i) => {
+                const isEditing = editingChallengeId === c.id;
+                const draft = isEditing && editingChallengeDraft ? editingChallengeDraft : c;
+
+                return (
+                  <div key={c.id} className="flex gap-3">
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
                       {i + 1}
                     </span>
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-900">
-                        {c.title}
-                      </h4>
-                      <p className="mt-0.5 text-sm text-gray-600 leading-relaxed">
-                        {c.description}
-                      </p>
-                      <dl className="mt-1 space-y-0.5 text-xs text-gray-600">
-                        {c.commitment_level && (
-                          <div>
-                            <dt className="inline font-semibold">Commitment level:</dt>{" "}
-                            <dd className="inline">{c.commitment_level}</dd>
+                    <div className="flex-1">
+                      {isEditing ? (
+                        <>
+                          {/* Editable fields */}
+                          <input
+                            type="text"
+                            className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm mb-2"
+                            value={draft.title}
+                            onChange={e => handleDraftChange("title", e.target.value)}
+                          />
+                          <textarea
+                            className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm mb-2"
+                            rows={3}
+                            value={draft.description}
+                            onChange={e => handleDraftChange("description", e.target.value)}
+                          />
+                          <div className="grid gap-2 text-xs sm:grid-cols-2">
+                            <input
+                              type="text"
+                              placeholder="Commitment level"
+                              className="w-full rounded-md border border-gray-300 px-2 py-1"
+                              value={draft.commitment_level}
+                              onChange={e =>
+                                handleDraftChange("commitment_level", e.target.value)
+                              }
+                            />
+                            <input
+                              type="text"
+                              placeholder="Cost level"
+                              className="w-full rounded-md border border-gray-300 px-2 py-1"
+                              value={draft.cost_level}
+                              onChange={e =>
+                                handleDraftChange("cost_level", e.target.value)
+                              }
+                            />
+                            <input
+                              type="text"
+                              placeholder="Participation level"
+                              className="w-full rounded-md border border-gray-300 px-2 py-1"
+                              value={draft.participation_level}
+                              onChange={e =>
+                                handleDraftChange("participation_level", e.target.value)
+                              }
+                            />
+                            <input
+                              type="text"
+                              placeholder="Location"
+                              className="w-full rounded-md border border-gray-300 px-2 py-1"
+                              value={draft.location}
+                              onChange={e =>
+                                handleDraftChange("location", e.target.value)
+                              }
+                            />
                           </div>
-                        )}
-                        {c.cost_level && (
-                          <div>
-                            <dt className="inline font-semibold">Cost level:</dt>{" "}
-                            <dd className="inline">{c.cost_level}</dd>
+
+                          {/* Edit controls + Accept/Decline still visible if you want */}
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={saveEditing}
+                              className="rounded-full bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditing}
+                              className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                            >
+                              Cancel
+                            </button>
                           </div>
-                        )}
-                        {c.participation_level && (
-                          <div>
-                            <dt className="inline font-semibold">Participation level:</dt>{" "}
-                            <dd className="inline">{c.participation_level}</dd>
+                        </>
+                      ) : (
+                        <>
+                          {/* Read-only view */}
+                          <h4 className="text-sm font-semibold text-gray-900">
+                            {c.title}
+                          </h4>
+                          <p className="mt-0.5 text-sm text-gray-600 leading-relaxed">
+                            {c.description}
+                          </p>
+                          <dl className="mt-1 space-y-0.5 text-xs text-gray-600">
+                            {c.commitment_level && (
+                              <div>
+                                <dt className="inline font-semibold">Commitment:</dt>{" "}
+                                <dd className="inline">{c.commitment_level}</dd>
+                              </div>
+                            )}
+                            {c.cost_level && (
+                              <div>
+                                <dt className="inline font-semibold">Cost:</dt>{" "}
+                                <dd className="inline">{c.cost_level}</dd>
+                              </div>
+                            )}
+                            {c.participation_level && (
+                              <div>
+                                <dt className="inline font-semibold">Participation:</dt>{" "}
+                                <dd className="inline">{c.participation_level}</dd>
+                              </div>
+                            )}
+                            {c.location && (
+                              <div>
+                                <dt className="inline font-semibold">Location:</dt>{" "}
+                                <dd className="inline">{c.location}</dd>
+                              </div>
+                            )}
+                          </dl>
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className="rounded-full bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 transition-colors"
+                            >
+                              Accept
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                            >
+                              Decline
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => startEditing(c)}
+                              className="rounded-full border border-indigo-200 px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+                            >
+                              Edit
+                            </button>
                           </div>
-                        )}
-                      </dl>
-                      <span
-                        className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                          c.location === "Anywhere"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-amber-100 text-amber-700"
-                        }`}
-                      >
-                        {c.location === "Anywhere"
-                          ? "Anywhere"
-                          : c.location}
-                      </span>
+                        </>
+                      )}
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             </div>
           )}
